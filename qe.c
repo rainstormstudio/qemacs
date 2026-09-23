@@ -6224,6 +6224,12 @@ void window_display(EditState *s)
     }
 
     s->mode->display(s);
+    /* The text area's clip excludes the modeline; restore the window clip. */
+    rect.x1 = s->x1;
+    rect.y1 = s->y1;
+    rect.x2 = s->x2;
+    rect.y2 = s->y2;
+    set_clip_rectangle(s->screen, &rect);
 
     display_mode_line(s);
     display_window_borders(s);
@@ -6283,6 +6289,11 @@ void qe_display(QEmacsState *qs)
         }
     }
 
+    {
+        CSSRect rect = { 0, 0, qs->screen->width, qs->screen->height };
+        set_clip_rectangle(qs->screen, &rect);
+    }
+
     if (qs->complete_refresh) {
         // erase status area
         QEStyleDef styledef;
@@ -6319,6 +6330,11 @@ void qe_display(QEmacsState *qs)
                 window_display(s);
             }
         }
+    }
+
+    {
+        CSSRect rect = { 0, 0, qs->screen->width, qs->screen->height };
+        set_clip_rectangle(qs->screen, &rect);
     }
 
     /* Redraw status and diag messages */
@@ -7786,11 +7802,6 @@ void file_complete(CompleteState *cp, CompleteFunc enumerate)
          */
         if (!stat(filename, &sb) && S_ISDIR(sb.st_mode))
             pstrcat(filename, sizeof(filename), "/");
-        if (sb.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) {
-            /* XXX: if the file has no extension and is executable,
-             * should check and ignore binary executable files.
-             */
-        }
         (*enumerate)(cp, filename, CT_SET);
     }
     find_file_close(&ffst);
@@ -9095,28 +9106,25 @@ int is_abs_path(const char *path)
 {
     size_t prefix;
 
-    if (*path == '/')
+    if (*path == '/'
+#ifdef CONFIG_WIN32
+    ||  *path == '\\'
+#endif
+    )
         return 1;
 
     /* Accept as absolute a drive or protocol followed by `/` */
     prefix = strcspn(path, "/:");
-    if (path[prefix] == ':' && path[prefix + 1] == '/')
+    if (path[prefix] == ':' && (path[prefix + 1] == '/'
+#ifdef CONFIG_WIN32
+                             || path[prefix + 1] == '\\'
+#endif
+                             ))
         return 1;
 
     return 0;
 }
 
-#ifdef CONFIG_WIN32
-/* convert '\' to '/' */
-static void path_win_to_unix(char *buf) {
-    char *p;
-
-    for (p = buf; *p; p++) {
-        if (*p == '\\')
-            *p = '/';
-    }
-}
-#endif
 
 /* canonicalize the path for a given window and make it absolute */
 void canonicalize_absolute_path(EditState *s, char *buf, int buf_size, const char *path1)
@@ -9791,7 +9799,7 @@ static void qe_check_buffer_file_key(QEmacsState *qs, EditBuffer *b, int ch, int
     case 'd':
     case 'c':
     do_compare:
-#ifdef CONFIG_TINY
+#if defined(CONFIG_TINY) || defined(CONFIG_WIN32)
         put_error(s, "Diff not supported");
 #else
         qe_ungrab_keys(qs);
@@ -11621,7 +11629,11 @@ static BOOL qe_add_resource_path(QEmacsState *qs, const char *path)
     if (len + 1 >= sizeof(qs->res_path) - path_len)
         return FALSE;
     if (path_len)
+#ifdef CONFIG_WIN32
+        qs->res_path[path_len++] = ';';
+#else
         qs->res_path[path_len++] = ':';
+#endif
     memcpy(qs->res_path + path_len, path, len + 1);
     return TRUE;
 }
@@ -11640,6 +11652,12 @@ static void qe_set_user_option(QEmacsState *qs, const char *user)
     /* compute resources path */
     qs->res_path[0] = '\0';
 
+#ifdef CONFIG_WIN32
+    /* Resource files shipped with the executable work regardless of cwd. */
+    get_dirname(path, countof(path), qs->argv[0]);
+    canonicalize_path(path, countof(path), path);
+    qe_add_resource_path(qs, path);
+#endif
     /* put current directory first if qe invoked as ./qe */
     if (stristart(qs->argv[0], "./qe", NULL)) {
         get_curdir(path, countof(path));
@@ -12435,7 +12453,7 @@ static int qe_init(QEmacsState *qs, int argc, char **argv)
     EditBuffer *b;
     QEDisplay *dpy;
     int i, _optind;
-#if !defined(CONFIG_TINY)
+#ifndef CONFIG_TINY
     int session_loaded = 0;
 #endif
 #if defined(CONFIG_ALL_KMAPS) || defined(CONFIG_UNICODE_JOIN)

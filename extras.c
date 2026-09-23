@@ -1646,7 +1646,7 @@ void do_apropos(EditState *s, const char *str)
     }
 }
 
-#ifndef CONFIG_CYGWIN
+#if !defined(CONFIG_CYGWIN) && !defined(CONFIG_WIN32)
 extern char **environ;
 #endif
 

@@ -32,11 +32,21 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include "config.h"     /* for CONFIG_WIN32 */
+#ifndef CONFIG_WIN32
 #include <pwd.h>
+#endif
 #include <unistd.h>
 
-#include "config.h"     /* for CONFIG_WIN32 */
 #include "util.h"
+#ifdef CONFIG_WIN32
+static void path_win_to_unix(char *path) {
+    for (; *path; path++) {
+        if (*path == '\\')
+            *path = '/';
+    }
+}
+#endif
 
 int qe_shell_match(const char *str, const char *pattern) {
     /*@API utils
@@ -145,12 +155,21 @@ int find_file_next(FindFileState *s, char *filename, int filename_size) {
             p = s->bufptr;
             if (*p == '\0')
                 return -1;
-            if (s->flags & FF_PATH)
+            if (s->flags & FF_PATH) {
+#ifdef CONFIG_WIN32
+                p += strcspn(p, ";");
+#else
                 p += strcspn(p, ":");
-            else
+#endif
+            } else {
                 p += strlen(p);
+            }
             pstrncpy(s->dirpath, countof(s->dirpath), s->bufptr, p - s->bufptr);
+#ifdef CONFIG_WIN32
+            if (*p == ';')
+#else
             if (*p == ':')
+#endif
                 p++;
             s->bufptr = p;
         new_dir:
@@ -171,8 +190,8 @@ int find_file_next(FindFileState *s, char *filename, int filename_size) {
             s->dir = opendir(s->dirpath);
         } else {
             int isdir = 0;
-#ifdef __MINT__ // only glibc defines _DIRENT_HAVE_D_TYPE
-            // Work around missing d_type
+#if !defined(_DIRENT_HAVE_D_TYPE) || !defined(DT_DIR)
+            /* Filesystems without dirent.d_type need a stat of the entry. */
             char tmppath[MAX_FILENAME_SIZE];
             makepath(tmppath, sizeof(tmppath), s->dirpath, dirent->d_name);
             isdir = is_directory(tmppath);
@@ -267,6 +286,13 @@ char *get_curdir(char *dest, size_t size) {
 char *get_homedir(char *dest, size_t size, const char *login) {
     const char *homedir = NULL;
 
+#ifdef CONFIG_WIN32
+    if (login && *login)
+        return NULL;
+    homedir = getenv("HOME");
+    if (!homedir)
+        homedir = getenv("USERPROFILE");
+#else
     if (login && *login) {
         struct passwd *pw = getpwnam(login);
         if (pw)
@@ -274,11 +300,12 @@ char *get_homedir(char *dest, size_t size, const char *login) {
     } else {
         homedir = getenv("HOME");
         if (!homedir) {
-            struct passwd *pw = getpwent();
+            struct passwd *pw = getpwuid(getuid());
             if (pw)
                 homedir = pw->pw_dir;
         }
     }
+#endif
     if (homedir) {
         pstrcpy(dest, size, homedir);
 #ifdef CONFIG_WIN32
@@ -367,16 +394,24 @@ char *canonicalize_path(char *buf, int buf_size, const char *path) {
     char *res = buf;
     size_t prefix;
 
+#ifdef CONFIG_WIN32
+    /* Normalize filesystem paths, not arbitrary command line arguments. */
+    pstrcpy(tmp, sizeof(tmp), path);
+    path_win_to_unix(tmp);
+    path = tmp;
+#else
     if (path >= buf && path < buf + buf_size) {
         /* brute force partial overlapping case */
         pstrcpy(tmp, sizeof tmp, path);
         path = tmp;
     }
+#endif
 
     /* check for URL protocol or MSDOS/windows drive */
     prefix = strcspn(path, "/:");
     if (path[prefix] == ':') {
-        if (prefix == 2) {
+        if (prefix == 1 && ((unsigned char)path[0] | 0x20) >= 'a'
+        &&  ((unsigned char)path[0] | 0x20) <= 'z') {
             /* windows drive: we canonicalize only the following path */
             /* XXX: this will not work for non current drives */
             *buf++ = *path++;

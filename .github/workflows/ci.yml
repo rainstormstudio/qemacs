@@ -72,36 +72,22 @@ jobs:
           ./configure
           make -j$(getconf _NPROCESSORS_ONLN)
 
-#  windows-mingw:
-#    runs-on: windows-latest
-#    strategy:
-#      fail-fast: false
-#      matrix:
-#        sys:
-#          - mingw32
-#          - mingw64
-#          - clang64
-#          - ucrt64
-#    defaults:
-#      run:
-#        shell: msys2 {0}
-#    steps:
-#    - uses: actions/checkout@v6
-#    - name: Setup MSYS2
-#      uses: msys2/setup-msys2@v2
-#      with:
-#        msystem: ${{matrix.sys}}
-#        install: >-
-#          git
-#          make
-#        pacboy: >-
-#          ninja:p
-#          toolchain:p
-#    - name: build
-#      run: |
-#        ./configure
-#        make
-#
+  windows-mingw:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: make
+          pacboy: toolchain:p
+      - name: build
+        run: |
+          ./configure
+          make -j4
 #  cygwin:
 #    runs-on: windows-latest
 #    defaults:

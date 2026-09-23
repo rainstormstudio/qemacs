@@ -26,8 +26,10 @@
 #include "qe.h"
 #include "variables.h"
 
+#ifndef CONFIG_WIN32
 #include <grp.h>
 #include <pwd.h>
+#endif
 
 enum {
     DIRED_SORT_FULLNAME = 0,
@@ -99,9 +101,11 @@ struct DiredState {
 struct DiredItem {
     char    *name;
     mode_t  mode;   /* inode protection mode */
+#ifndef CONFIG_WIN32
     nlink_t nlink;  /* number of hard links to the file */
     uid_t   uid;    /* user-id of owner */
     gid_t   gid;    /* group-id of owner */
+#endif
     dev_t   rdev;   /* device type, for special file inode */
     time_t  mtime;
     off_t   size;
@@ -349,76 +353,6 @@ static int dired_sort_func(void *opaque, const void *p1, const void *p2)
     return (sort_mode & DIRED_SORT_DESCENDING) ? -res : res;
 }
 
-int eb_put_filename(EditBuffer *b, const char *name, int flags) {
-    // write a filename to a buffer, encoding special characters according
-    // to flags
-    // XXX: use local array to write to buffer as a single modification?
-    int len = 0;
-    char buf[8];
-    u8 cc;
-    while ((cc = *name++) != '\0') {
-        if (cc > 0x7F && !(flags & PF_NO_UNICODE)) {
-            const char *p = name - 1;
-            char32_t c = utf8_decode(&p);
-            if (c >= 128 && c <= 0x10FFFF) {
-                int nc = utf8_encode(buf, c);
-                if (nc == p - name + 1 && !memcmp(buf, name - 1, nc)) {
-                    // valid UTF-8 encoded codepoint
-                    if (flags & 1) {
-                        if (c > 0xFFFF) {
-                            len += eb_printf(b, "\\u{%X}", c);
-                        } else {
-                            len += eb_printf(b, "\\x%04X", c);
-                        }
-                    } else {
-                        buf[nc] = '\0';
-                        eb_puts(b, buf);
-                        len += qe_wcwidth(c);
-                    }
-                    name = p;
-                    continue;
-                }
-            }
-        }
-        if (cc < ' ' || cc >= 0x7F) {
-            switch (flags & PF_ENCODING) {
-            case PF_QUESTION:
-                eb_putc(b, '?');
-                len += 1;
-                break;
-            case PF_OCTAL:
-                eb_putc(b, '\\');
-                len += 2;
-                switch (cc) {
-                case '\n':  eb_putc(b, 'n'); break;
-                case '\t':  eb_putc(b, 't'); break;
-                case '\r':  eb_putc(b, 'r'); break;
-                case '\b':  eb_putc(b, 'b'); break;
-                case '\f':  eb_putc(b, 'f'); break;
-                default:    eb_printf(b, "%03o", cc); len += 2; break;
-                }
-                break;
-            case PF_HEX:
-                eb_printf(b, "\\x%02X", cc);
-                len += 4;
-                break;
-            case PF_CARET:
-                if (cc < 32 || cc == 127) {
-                    eb_printf(b, "\\^%c", (cc + '@') & 127);
-                    len += 3;
-                    break;
-                }
-                eb_printf(b, "\\x%02X", cc);
-                len += 4;
-                break;
-            }
-        } else {
-            eb_putc(b, cc);
-            len += 1;
-        }
-    }
-    return len;
-}
 
 static int format_number(char *buf, int size, int human, off_t number)
 {
@@ -462,6 +396,7 @@ static int format_number(char *buf, int size, int human, off_t number)
     }
 }
 
+#ifndef CONFIG_WIN32
 static int format_gid(char *buf, int size, int nflag, gid_t gid)
 {
     // group_from_gid ?
@@ -483,6 +418,7 @@ static int format_uid(char *buf, int size, int nflag, uid_t uid)
     else
         return snprintf(buf, size, "%d", (int)uid);
 }
+#endif
 
 static int format_size(char *buf, int size, int human,
                        mode_t st_mode, dev_t st_rdev, off_t st_size)
@@ -590,9 +526,11 @@ static int get_trailchar(mode_t mode)
     if (S_ISDIR(mode)) {
         trailchar = '/';
     }
+#ifndef CONFIG_WIN32
     if (S_ISLNK(mode)) {
         trailchar = '@';
     }
+#endif
 #ifdef S_ISSOCK
     if (S_ISSOCK(mode))
         trailchar = '=';
@@ -608,6 +546,7 @@ static int get_trailchar(mode_t mode)
     return trailchar;
 }
 
+#ifndef CONFIG_WIN32
 static char *getentryslink(char *path, int size, const char *filename)
 {
     /* Warning: readlink does not append a null byte! */
@@ -620,6 +559,7 @@ static char *getentryslink(char *path, int size, const char *filename)
     else
         return NULL;
 }
+#endif
 
 static char *compute_attr(char *atts, mode_t mode)
 {
@@ -645,8 +585,10 @@ static char *compute_attr(char *atts, mode_t mode)
         if (S_ISSOCK(mode)  /* socket */)
             atts[0] = 's';
 #endif
+#ifndef CONFIG_WIN32
         if (S_ISLNK(mode))  /* symbolic link */
             atts[0] = 'l';  /* overrides directory */
+#endif
     }
 
     /* File mode */
@@ -763,6 +705,7 @@ static void dired_compute_columns(DiredState *ds)
 
         ds->modelen = 10;
 
+#ifndef CONFIG_WIN32
         len = snprintf(buf, sizeof(buf), "%d", (int)dip->nlink);
         if (ds->linklen < len)
             ds->linklen = len;
@@ -774,6 +717,7 @@ static void dired_compute_columns(DiredState *ds)
         len = format_gid(buf, sizeof(buf), ds->nflag, dip->gid);
         if (ds->gidlen < len)
             ds->gidlen = len;
+#endif
 
         len = format_size(buf, sizeof(buf), ds->hflag, dip->mode, dip->rdev, dip->size);
         if (ds->sizelen < len)
@@ -802,6 +746,7 @@ static int dired_format_details(DiredState *ds, DiredItem *dip,
     if (details_mask & DIRED_SHOW_MODE) {
         buf_printf(bp, "%s ", compute_attr(buf, dip->mode));
     }
+#ifndef CONFIG_WIN32
     if (details_mask & DIRED_SHOW_LINKS) {
         buf_printf(bp, "%*d ", ds->linklen, (int)dip->nlink);
     }
@@ -813,6 +758,7 @@ static int dired_format_details(DiredState *ds, DiredItem *dip,
         format_gid(buf, sizeof(buf), ds->nflag, dip->gid);
         buf_printf(bp, "%-*s ", ds->gidlen, buf);
     }
+#endif
     if (details_mask & DIRED_SHOW_SIZE) {
         format_size(buf, sizeof(buf), ds->hflag, dip->mode, dip->rdev, dip->size);
         buf_printf(bp, " %*s ", ds->sizelen, buf);
@@ -914,15 +860,20 @@ static void dired_update_buffer(DiredState *ds, EditBuffer *b, EditState *s,
             ds->details_mask ^= DIRED_SHOW_DATE;
         if ((width -= ds->modelen + 1) < 0)
             ds->details_mask ^= DIRED_SHOW_MODE;
+#ifndef CONFIG_WIN32
         if ((ds->nflag == 2) || ((width -= ds->uidlen + 1) < 0))
             ds->details_mask ^= DIRED_SHOW_UID;
         if ((ds->nflag == 2) || ((width -= ds->gidlen + 1) < 0))
             ds->details_mask ^= DIRED_SHOW_GID;
         if ((width -= ds->linklen + 1) < 0)
             ds->details_mask ^= DIRED_SHOW_LINKS;
+#endif
         // disable blocks display to avoid confusing output
         ds->details_mask ^= DIRED_SHOW_BLOCKS;
     }
+#ifdef CONFIG_WIN32
+        ds->details_mask &= DIRED_SHOW_MODE | DIRED_SHOW_SIZE | DIRED_SHOW_DATE;
+#endif
 
     /* construct list buffer */
     /* deleting buffer contents resets s->offset and s->offset_top */
@@ -1011,11 +962,13 @@ static void dired_update_buffer(DiredState *ds, EditBuffer *b, EditState *s,
                 eb_putc(b, trailchar);
             }
         }
+#ifndef CONFIG_WIN32
         if (S_ISLNK(dip->mode)
         &&  getentryslink(buf, sizeof(buf), dip->fullname)) {
             eb_puts(b, " -> ");
             eb_put_filename(b, buf, ds->pf_flags);
         }
+#endif
         b->cur_style = QE_STYLE_DIRED_DEFAULT;
         eb_putc(b, '\n');
     }
@@ -1245,7 +1198,11 @@ static DiredItem *dired_add_item(DiredState *ds, const char *name,
     size_t name_size = strlen(name) + 1;
     size_t name_offset = fullname_size;
 
+#ifdef CONFIG_WIN32
+    if (stat(fullname, &st) < 0)
+#else
     if (lstat(fullname, &st) < 0)
+#endif
         memset(&st, 0, sizeof st);
 
     if (fullname_size >= name_size
@@ -1259,6 +1216,7 @@ static DiredItem *dired_add_item(DiredState *ds, const char *name,
     if (!dip)
         return NULL;
     dip->flags = 0;
+#ifndef CONFIG_WIN32
     if (S_ISLNK(st.st_mode)) {
         struct stat st1;
         dip->flags |= DI_ISLNK;
@@ -1270,14 +1228,20 @@ static DiredItem *dired_add_item(DiredState *ds, const char *name,
             dip->flags |= DI_BROKEN;
         }
     } else
+#endif
     if (S_ISDIR(st.st_mode)) {
         dip->flags |= DI_ISDIR;
     }
     dip->mode = st.st_mode;
+#ifdef CONFIG_WIN32
+    /* MinGW's stat has no POSIX owner, link, or device metadata. */
+    dip->rdev = 0;
+#else
     dip->nlink = st.st_nlink;
     dip->uid = st.st_uid;
     dip->gid = st.st_gid;
     dip->rdev = st.st_rdev;
+#endif
     dip->mtime = st.st_mtime;
     dip->size = st.st_size;
     dip->hidden = 0;
@@ -2022,7 +1986,10 @@ int file_print_entry(CompleteState *cp, EditState *s, const char *name) {
     struct stat st;
     EditBuffer *b = s->b;
     char buf[20];
-    int len, sizelen = 10, linklen = 2, uidlen = 8, gidlen = 8;
+    int len, sizelen = 10;
+#ifndef CONFIG_WIN32
+    int linklen = 2, uidlen = 8, gidlen = 8;
+#endif
 
     if (!stat(name, &st)) {
         b->cur_style = S_ISDIR(st.st_mode) ? QE_STYLE_DIRED_DIRECTORY : QE_STYLE_DIRED_FILENAME;
@@ -2034,11 +2001,13 @@ int file_print_entry(CompleteState *cp, EditState *s, const char *name) {
         format_date(buf, sizeof(buf), st.st_mtime, dired_time_format);
         len += eb_printf(b, "  %s", buf);
         len += eb_printf(b, "  %s", compute_attr(buf, st.st_mode));
+#ifndef CONFIG_WIN32
         format_uid(buf, sizeof(buf), dired_nflag, st.st_uid);
         len += eb_printf(b, "  %-*s", uidlen, buf);
         format_gid(buf, sizeof(buf), dired_nflag, st.st_gid);
         len += eb_printf(b, "  %-*s", gidlen, buf);
         len += eb_printf(b, "  %*d", linklen, (int)st.st_nlink);
+#endif
     } else {
         len = eb_put_filename(b, name, dired_pf_flags);
     }

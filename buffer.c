@@ -27,6 +27,76 @@
 #ifdef CONFIG_MMAP
 #include <sys/mman.h>
 #endif
+int eb_put_filename(EditBuffer *b, const char *name, int flags) {
+    // write a filename to a buffer, encoding special characters according
+    // to flags
+    // XXX: use local array to write to buffer as a single modification?
+    int len = 0;
+    char buf[8];
+    u8 cc;
+    while ((cc = *name++) != '\0') {
+        if (cc > 0x7F && !(flags & PF_NO_UNICODE)) {
+            const char *p = name - 1;
+            char32_t c = utf8_decode(&p);
+            if (c >= 128 && c <= 0x10FFFF) {
+                int nc = utf8_encode(buf, c);
+                if (nc == p - name + 1 && !memcmp(buf, name - 1, nc)) {
+                    // valid UTF-8 encoded codepoint
+                    if (flags & 1) {
+                        if (c > 0xFFFF) {
+                            len += eb_printf(b, "\\u{%X}", c);
+                        } else {
+                            len += eb_printf(b, "\\x%04X", c);
+                        }
+                    } else {
+                        buf[nc] = '\0';
+                        eb_puts(b, buf);
+                        len += qe_wcwidth(c);
+                    }
+                    name = p;
+                    continue;
+                }
+            }
+        }
+        if (cc < ' ' || cc >= 0x7F) {
+            switch (flags & PF_ENCODING) {
+            case PF_QUESTION:
+                eb_putc(b, '?');
+                len += 1;
+                break;
+            case PF_OCTAL:
+                eb_putc(b, '\\');
+                len += 2;
+                switch (cc) {
+                case '\n':  eb_putc(b, 'n'); break;
+                case '\t':  eb_putc(b, 't'); break;
+                case '\r':  eb_putc(b, 'r'); break;
+                case '\b':  eb_putc(b, 'b'); break;
+                case '\f':  eb_putc(b, 'f'); break;
+                default:    eb_printf(b, "%03o", cc); len += 2; break;
+                }
+                break;
+            case PF_HEX:
+                eb_printf(b, "\\x%02X", cc);
+                len += 4;
+                break;
+            case PF_CARET:
+                if (cc < 32 || cc == 127) {
+                    eb_printf(b, "\\^%c", (cc + '@') & 127);
+                    len += 3;
+                    break;
+                }
+                eb_printf(b, "\\x%02X", cc);
+                len += 4;
+                break;
+            }
+        } else {
+            eb_putc(b, cc);
+            len += 1;
+        }
+    }
+    return len;
+}
 
 static void eb_addlog(EditBuffer *b, enum LogOperation op,
                       int offset, int size);
@@ -2973,7 +3043,10 @@ int eb_write_buffer(EditBuffer *b, int start, int end, const char *filename)
  */
 int eb_save_buffer(EditBuffer *b)
 {
-    int ret, st_mode;
+    int ret;
+#ifndef CONFIG_WIN32
+    int st_mode;
+#endif
     char buf1[MAX_FILENAME_SIZE];
     const char *filename;
     struct stat st;
@@ -2982,10 +3055,12 @@ int eb_save_buffer(EditBuffer *b)
         return -1;
 
     filename = b->filename;
-    /* get old file permission */
+#ifndef CONFIG_WIN32
+    /* preserve existing permissions on Unix */
     st_mode = 0644;
     if (stat(filename, &st) == 0)
         st_mode = st.st_mode & 0777;
+#endif
 
     if (!b->qs->backup_inhibited
     &&  strlen(filename) < MAX_FILENAME_SIZE - 1) {

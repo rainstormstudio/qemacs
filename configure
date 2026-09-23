@@ -29,15 +29,15 @@ cross_prefix=""
 
 cc="cc"
 host_cc="cc"
-if test `which clang 2>/dev/null` ; then
+if command -v clang >/dev/null 2>&1 ; then
   cc="clang"
   host_cc="clang"
 else
-  if test `which gcc 2>/dev/null` ; then
+  if command -v gcc >/dev/null 2>&1 ; then
     cc="gcc"
     host_cc="gcc"
   else
-    if test `which tcc 2>/dev/null` ; then
+    if command -v tcc >/dev/null 2>&1 ; then
       cc="tcc"
       host_cc="tcc"
     fi
@@ -62,6 +62,7 @@ gprof="no"
 network="yes"
 atari="no"
 win32="no"
+mingw="no"
 cygwin="no"
 darwin="no"
 linux="no"
@@ -147,6 +148,9 @@ case $targetos in
     ;;
   MINGW*)
     mingw="yes"
+    win32="yes"
+    cc="gcc"
+    host_cc="gcc"
     ;;
   CYGWIN*)
     cygwin="yes"
@@ -238,7 +242,7 @@ echo "Standard options:"
 echo "  --help                   print this message"
 echo "  --prefix=PREFIX          install in PREFIX [$prefix]"
 echo "  --enable-atari           enable atari cross compile"
-echo "  --enable-win32           enable win32 cross compile"
+echo "  --enable-win32           enable Win32 (cross builds need --cross-prefix)"
 echo "  --enable-cygwin          compile for cygwin systems"
 echo "  --disable-x11            disable Xwindow support"
 echo "  --disable-xv             disable Xvideo extension support"
@@ -416,23 +420,23 @@ if test "$atari" = "yes" ; then
 fi
 
 if test "$win32" = "yes" ; then
-    if test "$cygwin" = "yes" ; then
-        cross_prefix="i686-pc-mingw32-"
-        gcc_major="3"
-	CFLAGS="$CFLAGS -I/usr/include/mingw -I/usr/include/w32api"
-	LDFLAGS="$LDFLAGS -L/usr/lib/mingw"
-    else
-        cross_prefix="i586-mingw32msvc-"
-	CFLAGS="$CFLAGS -I/usr/i586-mingw32msvc/include"
-	extralibs="$extralibs -lws2_32"
+    if test "$mingw" != "yes" -a -z "$cross_prefix" ; then
+        echo "Win32 cross builds require --cross-prefix=PREFIX" >&2
+        exit 1
     fi
     network="no"
+    ptsname="no"
+    unlockio="no"
     doc="no"
     plugins="no"
     x11="no"
+    png="no"
+    ffmpeg="no"
+    html="no"
     mmap="no"
     cygwin="no"
     exe=".exe"
+    targetos="WIN32"
 fi
 
 if test "$cygwin" = "yes" ; then
@@ -445,15 +449,6 @@ if test "$cygwin" = "yes" ; then
     exe=".exe"
 fi
 
-if test "$mingw" = "yes" ; then
-    doc="no"
-    x11="no"
-    png="no"
-    ffmpeg="no"
-    html="no"
-    plugins="no"
-    exe=".exe"
-fi
 
 if test "$x11" = "no" ; then
     xv="no"
@@ -476,6 +471,7 @@ cc="${cross_prefix}${cc}"
 ar="${cross_prefix}${ar}"
 size="${cross_prefix}${size}"
 strip="${cross_prefix}${strip}"
+windres="${cross_prefix}windres"
 
 # ---
 # check availability of some header files
@@ -609,6 +605,7 @@ echo "CC=$cc" >> $TMPMAK
 echo "GCC_MAJOR=$gcc_major" >> $TMPMAK
 echo "HOST_CC=$host_cc" >> $TMPMAK
 echo "AR=$ar" >> $TMPMAK
+echo "WINDRES=$windres" >> $TMPMAK
 echo "SIZE=$size" >> $TMPMAK
 echo "STRIP=$strip $strip_args" >> $TMPMAK
 echo "INSTALL=install" >> $TMPMAK

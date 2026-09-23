@@ -29,6 +29,10 @@ ifeq (,$(wildcard $(DEPTH)/config.mak))
 endif
 
 include $(DEPTH)/config.mak
+ifdef CONFIG_WIN32
+  SHELL := sh
+endif
+
 
 ifeq (,$(V)$(VERBOSE))
     echo := @echo
@@ -200,16 +204,19 @@ endif
 
 ifdef CONFIG_WIN32
   OBJS+= unix.o win32.o
-#  OBJS+= printf.o
-  LIBS+= -lmsvcrt -lgdi32 -lwsock32
+  LDFLAGS+= -mwindows
+  LIBS+= -lgdi32 -luser32 -lshell32 -lws2_32
 else
   OBJS+= unix.o tty.o
   LIBS+= $(EXTRALIBS)
 endif
 
 ifeq (qe,$(TARGET))
+TARGETS += kmaps ligatures
+ifndef CONFIG_WIN32
 # qe-manual.md depends on $(SRCS) and $(DEPENDS)
-TARGETS += kmaps ligatures qe-manual.md
+TARGETS += qe-manual.md
+endif
 endif
 
 ifndef TARGET_TINY
@@ -233,7 +240,7 @@ endif
 OBJS+= charsetjis.o charsetmore.o
 
 ifdef CONFIG_ALL_MODES
-OBJS+= modes/unihex.o   modes/bufed.o    modes/orgmode.o  modes/markdown.o \
+OBJS+= modes/dired.o modes/unihex.o modes/bufed.o modes/orgmode.o modes/markdown.o \
        lang/clang.o     lang/xml.o       lang/htmlsrc.o   lang/forth.o     \
        lang/arm.o       lang/lisp.o      lang/makemode.o  lang/perl.o      \
        lang/script.o    lang/ebnf.o      lang/cobol.o     lang/rlang.o     \
@@ -250,7 +257,7 @@ OBJS+= modes/unihex.o   modes/bufed.o    modes/orgmode.o  modes/markdown.o \
        lang/rye.o       lang/nanorc.o    lang/tcl.o       modes/fractal.o  \
        lang/algol68.o	$(EXTRA_MODES)
 ifndef CONFIG_WIN32
-OBJS+= modes/shell.o    modes/dired.o    modes/archive.o  modes/latex-mode.o
+OBJS+= modes/shell.o    modes/archive.o  modes/latex-mode.o
 endif
 endif  # ifdef CONFIG_ALL_MODES
 
@@ -315,6 +322,9 @@ OBJS_DIR:= $(DEPTH)/.objs/$(TARGET_OS)-$(TARGET_ARCH)-$(CC)/$(TARGET_OBJ)$(DEBUG
 CFLAGS+= -I$(OBJS_DIR)
 OBJS:= $(addprefix $(OBJS_DIR)/, $(OBJS))
 OBJS+= $(OBJS_DIR)/$(TARGET)_modules.o
+ifdef CONFIG_WIN32
+  OBJS+= $(OBJS_DIR)/win32-res.o
+endif
 
 all: $(TARGETLIBS) $(TARGET)$(DEBUG_SUFFIX)$(EXE) $(TARGETS)
 
@@ -339,7 +349,12 @@ endif
 ifeq (tqe,$(TARGET))
 # Amalgamation mode produces a larger executable
 TSRCS:=qe.c cutils.c util.c color.c charset.c buffer.c search.c input.c display.c \
-       modes/hex.c parser.c unix.c tty.c win32.c qeend.c
+       modes/hex.c parser.c unix.c qeend.c
+ifdef CONFIG_WIN32
+TSRCS+= win32.c
+else
+TSRCS+= tty.c
+endif
 TSRCS+= $(OBJS_DIR)/tqe_modules.c
 
 tqe1_g$(EXE): tqe.c $(TSRCS) Makefile
@@ -395,6 +410,11 @@ $(OBJS_DIR)/fbfrender.o: fbfrender.c fbfrender.h libfbf.h
 $(OBJS_DIR)/modes/stb.o: modes/stb.c modes/stb_image.h
 $(OBJS_DIR)/libunicode.o: libunicode.c libunicode.h libunicode-table.h
 $(OBJS_DIR)/libregexp.o: libregexp.c libregexp.h libregexp-opcode.h
+
+$(OBJS_DIR)/win32-res.o: win32.rc win32.manifest
+	$(echo) RC $@
+	$(cmd)  mkdir -p $(dir $@)
+	$(cmd)  $(WINDRES) -i $< -o $@ -O coff
 
 $(OBJS_DIR)/%.o: %.c $(DEPENDS) Makefile
 	$(echo) CC $(ECHO_CFLAGS) -c $<

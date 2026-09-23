@@ -27,9 +27,12 @@
 
 #ifdef CONFIG_WIN32
 #include <winsock.h>
+#include <windows.h>
 #include <sys/timeb.h>
-/* Use a conditional typedef to avoid compilation warning */
 typedef u_int fdesc_t;
+extern int win32_pump_messages(void);
+extern int win32_get_event(QEditScreen *s, QEEvent *ev);
+extern QEmacsState *win32_get_state(void);
 #else
 #include <sys/wait.h>
 typedef int fdesc_t;
@@ -268,10 +271,13 @@ static inline int url_check_timers(URLState *up, int max_delay)
 /* block until one event */
 static void url_block(URLState *up)
 {
+#ifndef CONFIG_WIN32
     IOHandler *uh;
-    int ret, i, delay;
+    int ret, i;
     fd_set rfds, wfds;
     struct timeval tv;
+#endif
+    int delay;
 
     delay = url_check_timers(up, MAX_DELAY);
 #if 0
@@ -281,6 +287,21 @@ static void url_block(URLState *up)
         printf("%5d: delay=%d\n", count++, delay);
     }
 #endif
+#ifdef CONFIG_WIN32
+    /* No socket handlers are registered on Windows. select() cannot wait on
+       the GUI message queue; let the message pump share the timer deadline. */
+    MsgWaitForMultipleObjects(0, NULL, FALSE, delay > 0 ? delay : 0, QS_ALLINPUT);
+    if (win32_pump_messages()) {
+        up->exit_request = 1;
+    } else {
+        QEmacsState *qs = win32_get_state();
+        QEEvent ev;
+        while (qs && !up->exit_request && win32_get_event(qs->screen, &ev)) {
+            qe_handle_event(qs, &ev);
+            url_call_bottom_halves(up);
+        }
+    }
+#else
     tv.tv_sec = delay / 1000;
     tv.tv_usec = (delay % 1000) * 1000;
 
@@ -317,7 +338,6 @@ static void url_block(URLState *up)
         }
     }
 
-#ifndef CONFIG_WIN32
     /* handle terminated children */
     for (;;) {
         int pid, status;
@@ -343,7 +363,7 @@ int url_main_loop(URLState *up)
 {
     while (!up->exit_request) {
         url_block(up);
-        if (*up->tail_cb) {
+        if (up->tail_cb) {
             // call one shot tail function
             void (*cb)(void *opaque) = up->tail_cb;
             up->tail_cb = NULL;
