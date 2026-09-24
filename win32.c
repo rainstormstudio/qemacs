@@ -636,6 +636,101 @@ static void win_set_clip(QEditScreen *s, int x, int y, int w, int h)
     IntersectClipRect(win_ctx.hdc, x, y, x + max_int(w, 0), y + max_int(h, 0));
 }
 
+static int win_draw_picture(QEditScreen *s,
+                            int dst_x, int dst_y, int dst_w, int dst_h,
+                            const QEPicture *ip,
+                            int src_x, int src_y, int src_w, int src_h,
+                            int flags)
+{
+    BITMAPV4HEADER bih = { 0 };
+    QEPicture converted = { 0 };
+    unsigned char *pixels = NULL;
+    size_t pitch, size;
+    int format, y, stretch_mode, result;
+    POINT old_origin;
+    BOOL have_origin;
+
+    (void)s;
+    (void)flags;
+    if (!win_ctx.hdc || !ip || !ip->data[0] || ip->width <= 0 || ip->height <= 0
+    ||  dst_w <= 0 || dst_h <= 0 || src_w <= 0 || src_h <= 0
+    ||  src_x < 0 || src_y < 0
+    ||  src_x > ip->width - src_w || src_y > ip->height - src_h
+    ||  ip->width > INT_MAX / 4)
+        return 1;
+
+    format = ip->format;
+    if ((format != QEBITMAP_FORMAT_BGRA32
+         && format != QEBITMAP_FORMAT_RGBA32)
+    ||  ip->linesize[0] != ip->width * 4) {
+        int row_size = ip->width * 4;
+
+        if (((format == QEBITMAP_FORMAT_RGBA32
+           || format == QEBITMAP_FORMAT_BGRA32)
+          && ip->linesize[0] < row_size)
+        ||  (size_t)ip->height > SIZE_MAX / (size_t)row_size)
+            return 1;
+        pitch = (size_t)row_size;
+        size = pitch * ip->height;
+        pixels = qe_malloc_array(unsigned char, size);
+        if (!pixels)
+            return 1;
+        converted.width = ip->width;
+        converted.height = ip->height;
+        converted.format = QEBITMAP_FORMAT_RGBA32;
+        converted.data[0] = pixels;
+        converted.linesize[0] = row_size;
+        if (format == QEBITMAP_FORMAT_RGBA32) {
+            for (y = 0; y < ip->height; y++) {
+                memcpy(pixels + y * pitch,
+                       ip->data[0] + y * ip->linesize[0], pitch);
+            }
+        } else
+        if (qe_picture_copy(&converted, 0, 0, ip->width, ip->height,
+                            ip, 0, 0, ip->width, ip->height, 0)) {
+            qe_free(&pixels);
+            return 1;
+        }
+        ip = &converted;
+        format = QEBITMAP_FORMAT_RGBA32;
+    }
+
+    bih.bV4Size = sizeof(bih);
+    bih.bV4Width = ip->width;
+    bih.bV4Height = -ip->height;  /* top-down rows */
+    bih.bV4Planes = 1;
+    bih.bV4BitCount = 32;
+    bih.bV4V4Compression = BI_BITFIELDS;
+    bih.bV4CSType = 0x73524742;  /* LCS_sRGB */
+    if (format == QEBITMAP_FORMAT_BGRA32) {
+        /* stb_image supplies R,G,B,A bytes; describe their bit positions. */
+        bih.bV4RedMask = 0x000000ff;
+        bih.bV4GreenMask = 0x0000ff00;
+        bih.bV4BlueMask = 0x00ff0000;
+    } else {
+        /* QERGB pixels are packed as 0xAARRGGBB. */
+        bih.bV4RedMask = 0x00ff0000;
+        bih.bV4GreenMask = 0x0000ff00;
+        bih.bV4BlueMask = 0x000000ff;
+    }
+
+    stretch_mode = SetStretchBltMode(win_ctx.hdc, HALFTONE);
+    have_origin = GetBrushOrgEx(win_ctx.hdc, &old_origin);
+    if (have_origin)
+        SetBrushOrgEx(win_ctx.hdc, 0, 0, NULL);
+    result = StretchDIBits(win_ctx.hdc,
+                           dst_x, dst_y, dst_w, dst_h,
+                           src_x, src_y, src_w, src_h,
+                           ip->data[0], (const BITMAPINFO *)&bih,
+                           DIB_RGB_COLORS, SRCCOPY);
+    if (have_origin)
+        SetBrushOrgEx(win_ctx.hdc, old_origin.x, old_origin.y, NULL);
+    if (stretch_mode)
+        SetStretchBltMode(win_ctx.hdc, stretch_mode);
+    qe_free(&pixels);
+    return result == GDI_ERROR;
+}
+
 static QEDisplay win32_dpy = {
     "win32", 1, 1,
     win_probe,
@@ -659,7 +754,7 @@ static QEDisplay win32_dpy = {
     NULL, /* dpy_bmp_draw */
     NULL, /* dpy_bmp_lock */
     NULL, /* dpy_bmp_unlock */
-    NULL, /* dpy_draw_picture */
+    win_draw_picture, /* dpy_draw_picture */
     NULL, /* dpy_full_screen */
     NULL, /* dpy_describe */
     NULL, /* dpy_sound_bell */
